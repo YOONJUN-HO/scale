@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>C3→C5 음 선택 · 세로 간격 반영</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --panel:#111722; --accent:#7bdcff; --accent2:#ffd166; --text:#e8eef7; --muted:#9db0c7;
+      --btn:#182233; --btnHover:#1f2b44; --playing:#2a9d8f; --stop:#e63946;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Apple Color Emoji,Noto Color Emoji;color:var(--text);background:radial-gradient(1200px 800px at 85% -10%,#132037 0%,#0b0f14 60%);}    
+    header{padding:20px 24px;display:flex;gap:16px;align-items:center;}
+    header h1{font-size:20px;margin:0;font-weight:700;letter-spacing:.2px}
+    header .sub{color:var(--muted);font-size:13px}
+
+    .wrap{display:grid;grid-template-columns: minmax(260px,340px) 1fr; gap:18px; padding:0 20px 24px;}
+
+    .panel{background:var(--panel);border:1px solid #1a2434;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+
+    .controls{padding:16px 16px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+    .controls label{display:inline-flex;align-items:center;gap:8px;background:var(--btn);border:1px solid #20304a;padding:10px 12px;border-radius:12px;color:var(--text);font-size:13px}
+    .controls input[type="range"]{width:160px}
+    .controls .pill{background:#142035;border:1px solid #213150;padding:8px 10px;border-radius:999px;font-size:12px;color:var(--muted)}
+    .controls select{background:#0f1829;color:var(--text);border:1px solid #213150;border-radius:10px;padding:8px 10px}
+    .controls button{background:var(--btn);border:1px solid #213150;color:var(--text);padding:10px 14px;border-radius:12px;font-weight:600;cursor:pointer}
+    .controls button:hover{background:var(--btnHover)}
+    .controls .stop{background: #2a1b1e;border-color:#4a2026}
+    .controls .stop:hover{background:#3a1f24}
+
+    .board{position:relative;height:720px;margin:12px;background:linear-gradient(180deg,#0f1625,#0d1421);border-radius:16px;overflow:hidden;border:1px solid #1a2434}
+    .ruler{position:absolute;left:0;top:0;bottom:0;width:64px;background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,0));border-right:1px solid #1a2434}
+    .ruler .tick{position:absolute;left:8px;right:8px;height:1px;background:#263350}
+    .ruler .label{position:absolute;left:10px;transform:translateY(-50%);font-size:12px;color:var(--muted)}
+
+    .lane{position:absolute;left:64px;right:0;top:0;bottom:0;padding:0 18px}
+
+    .note{position:absolute;left:24px;right:24px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border-radius:12px;background:var(--btn);border:1px solid #20304a;cursor:pointer;transition:transform .08s ease, background .2s ease; color:#ffffff;}
+    .note:hover{transform:translateX(4px);background:var(--btnHover)}
+    .note .name{font-weight:700;letter-spacing:.4px; color:#ffffff;}
+    .note .freq{font-size:12px;color:var(--muted)}
+    .note.playing{background:#11352f;border-color:#1e5e53;box-shadow:0 0 0 1px rgba(42,157,143,.4) inset, 0 8px 20px rgba(0,0,0,.25)}
+
+    footer{padding:10px 20px 24px;color:var(--muted);font-size:12px}
+    .legend{padding:10px 16px 16px;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>C3 → C5 톤 선택기</h1>
+    <div class="sub">세로 위치가 음고 간격(12-TET, 센트 단위)에 비례해 배치됩니다.</div>
+  </header>
+
+  <div class="wrap">
+    <section class="panel">
+      <div class="controls">
+        <button id="stopAll" class="stop">모두 정지 ⏹</button>
+        <label>파형
+          <select id="waveform">
+            <option value="sine">Sine</option>
+            <option value="triangle">Triangle</option>
+            <option value="square">Square</option>
+            <option value="sawtooth">Sawtooth</option>
+          </select>
+        </label>
+        <label>볼륨
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="0.2"/>
+        </label>
+        <span class="pill">클릭: 해당 음을 지속 재생 / 다시 클릭: 정지</span>
+      </div>
+      <div class="board">
+        <div class="ruler" id="ruler"></div>
+        <div class="lane" id="lane"></div>
+      </div>
+      <div class="legend">참고: 윗쪽이 높은 음(C5), 아래쪽이 낮은 음(C3). 동일한 반음 간격은 동일한 세로 간격으로 표시됩니다.</div>
+    </section>
+  </div>
+
+  <footer>Web Audio API · 12평균율(12‑TET) · 참고 A4=440Hz</footer>
+
+<script>
+(function(){
+  const A4 = 440;
+  const MIDI_A4 = 69;
+  const midiToFreq = (m) => A4 * Math.pow(2, (m - MIDI_A4) / 12);
+
+  const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const KOR_NAMES = ['도','도#','레','레#','미','파','파#','솔','솔#','라','라#','시'];
+  const notes = [];
+
+  // 범위: C3(48) ~ C5(72)
+  for(let midi=48; midi<=72; midi++){
+    const engOct = Math.floor(midi/12) - 1;      // 과학적 표기: C4=60
+    const korOct = engOct - 2;                   // 요구사항: C3가 1옥 → engOct(3) - 2 = 1
+    const engName = NOTE_NAMES[midi % 12] + engOct;
+    const korName = `${korOct}옥${KOR_NAMES[midi % 12]}`;
+    notes.push({ midi, engName, korName, freq: midiToFreq(midi), engOct, korOct });
+  }
+  notes.sort((a,b)=>b.midi-a.midi);
+
+  // ====== 오디오 ======
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const audioCtx = new AudioCtx();
+  const master = audioCtx.createGain();
+  master.gain.value = 0.2; master.connect(audioCtx.destination);
+
+  let current = null;
+  const waveformSel = document.getElementById('waveform');
+  const volume = document.getElementById('volume');
+  volume.addEventListener('input', e=> master.gain.value = +e.target.value);
+
+  function playNote(note){
+    stopCurrent();
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = waveformSel.value;
+    osc.frequency.value = note.freq;
+    osc.connect(g); g.connect(master);
+    const now = audioCtx.currentTime;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(1, now + 0.02);
+    osc.start();
+    current = {osc, gain:g, note};
+    setPlayingUI(note.midi, true);
+  }
+
+  function stopCurrent(){
+    if(!current) return;
+    const now = audioCtx.currentTime;
+    current.gain.gain.cancelScheduledValues(now);
+    current.gain.gain.setTargetAtTime(0, now, 0.03);
+    try{ current.osc.stop(now + 0.08);}catch(e){}
+    setPlayingUI(current.note.midi, false);
+    current = null;
+  }
+
+  document.getElementById('stopAll').addEventListener('click', stopCurrent);
+
+  function setPlayingUI(midi, on){
+    const el = document.querySelector(`[data-midi="${midi}"]`);
+    if(el){ el.classList.toggle('playing', !!on); }
+  }
+
+  // ====== 레이아웃 ======
+  const lane = document.getElementById('lane');
+  const ruler = document.getElementById('ruler');
+  const H = 680;
+  const topPad = 20, botPad = 20;
+  lane.style.top = topPad+'px';
+  lane.style.bottom = botPad+'px';
+
+  const minMidi = 48, maxMidi = 72;
+  const totalSemis = maxMidi - minMidi;
+  const pxPerSemi = (H - topPad - botPad) / totalSemis;
+
+  const yForMidi = (midi)=>{
+    const semisFromBottom = midi - minMidi;
+    return semisFromBottom * pxPerSemi;
+  }
+
+  for(let m=minMidi; m<=maxMidi; m++){
+    const engOct = Math.floor(m/12) - 1;
+    const korOct = engOct - 2; // C3=1옥
+    const y = yForMidi(m);
+
+    const tick = document.createElement('div');
+    tick.className='tick';
+    tick.style.bottom = y + 'px';
+    tick.style.opacity = (m%12===0||m%12===5)?1:.45;
+    ruler.appendChild(tick);
+
+    const lab = document.createElement('div');
+    lab.className='label';
+    lab.style.bottom = y + 'px';
+    lab.textContent = NOTE_NAMES[m%12] + engOct + ` (${korOct}옥${KOR_NAMES[m%12]})`;
+    ruler.appendChild(lab);
+  }
+
+  notes.forEach((n)=>{
+    const btn = document.createElement('button');
+    btn.className='note';
+    btn.dataset.midi = n.midi;
+    btn.style.bottom = yForMidi(n.midi) + 'px';
+    btn.innerHTML = `<span class="name">${n.engName} (${n.korName})</span><span class="freq">${n.freq.toFixed(2)} Hz</span>`;
+    btn.addEventListener('click', ()=>{
+      if(current && current.note.midi===n.midi){ stopCurrent(); }
+      else{ if(audioCtx.state==='suspended') audioCtx.resume(); playNote(n); }
+    });
+    lane.appendChild(btn);
+  });
+})();
+</script>
+</body>
+</html>
